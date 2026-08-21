@@ -12,6 +12,7 @@ import {
   ReceiptText,
   Croissant,
   UtensilsCrossed,
+  BarChart3,
   X,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -43,6 +44,7 @@ const navItems = [
   { to: '/servicios', label: 'Servicios', icon: ChefHat },
   { to: '/agregar-lunch', label: 'Agregar lunch', icon: UtensilsCrossed },
   { to: '/agenda', label: 'Agenda', icon: CalendarClock },
+  { to: '/estadisticas', label: 'Estadísticas', icon: BarChart3 },
 ] as const
 
 function RootDocument({ children }: { children: React.ReactNode }) {
