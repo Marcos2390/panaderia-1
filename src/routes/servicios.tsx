@@ -1,10 +1,11 @@
 import { createFileRoute, useRouter, Link } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { useState } from 'react'
-import { ChevronRight, Plus, Trash2, Users, X } from 'lucide-react'
+import { CalendarPlus, ChevronRight, Plus, Trash2, Users, X } from 'lucide-react'
 import { getProducts } from '../server/products.functions'
 import { getServices } from '../server/services.functions'
 import { createSale } from '../server/sales.functions'
+import { createAppointment } from '../server/appointments.functions'
 
 export const Route = createFileRoute('/servicios')({
   loader: async () => {
@@ -32,6 +33,7 @@ function ServicesPage() {
   const { products, services } = Route.useLoaderData()
   const router = useRouter()
   const createSaleFn = useServerFn(createSale)
+  const createAppointmentFn = useServerFn(createAppointment)
 
   const activeProducts = products.filter((p) => p.active)
 
@@ -40,16 +42,23 @@ function ServicesPage() {
   const [building, setBuilding] = useState<'custom' | number | null>(null)
   const [orderName, setOrderName] = useState('')
   const [customerName, setCustomerName] = useState('')
+  const [customerPhone, setCustomerPhone] = useState('')
   const [paymentMethod, setPaymentMethod] = useState('efectivo')
   const [cart, setCart] = useState<CartLine[]>([])
   const [selectedProductId, setSelectedProductId] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [confirmation, setConfirmation] = useState<string | null>(null)
+  const [lastScheduled, setLastScheduled] = useState(false)
+  const [scheduleAppointment, setScheduleAppointment] = useState(false)
+  const [scheduledFor, setScheduledFor] = useState('')
 
   const startFromLunch = (service: (typeof services)[number]) => {
     setOrderName(service.name)
     setCustomerName('')
+    setCustomerPhone('')
     setPaymentMethod('efectivo')
+    setScheduleAppointment(false)
+    setScheduledFor('')
     setCart(
       service.items.map((item) => ({
         productId: item.productId,
@@ -66,16 +75,22 @@ function ServicesPage() {
   const startCustom = () => {
     setOrderName('')
     setCustomerName('')
+    setCustomerPhone('')
     setPaymentMethod('efectivo')
     setCart([])
     setSelectedProductId('')
     setBuilding('custom')
     setConfirmation(null)
+    setScheduleAppointment(false)
+    setScheduledFor('')
   }
 
   const cancelBuilding = () => {
     setBuilding(null)
     setCart([])
+    setScheduleAppointment(false)
+    setScheduledFor('')
+    setCustomerPhone('')
   }
 
   const addToCart = () => {
@@ -106,7 +121,6 @@ function ServicesPage() {
   }
 
   const updateQuantity = (index: number, quantity: number) => {
-    if (quantity < 1) return
     setCart((prev) =>
       prev.map((line, i) => (i === index ? { ...line, quantity } : line)),
     )
@@ -123,15 +137,33 @@ function ServicesPage() {
 
   const handleCreatePedido = async () => {
     if (cart.length === 0) return
+    if (scheduleAppointment && !scheduledFor) return
     setSubmitting(true)
     try {
       const notes = orderName ? `Pedido: ${orderName}` : ''
       await createSaleFn({
         data: { customerName, paymentMethod, notes, items: cart },
       })
+
+      if (scheduleAppointment && scheduledFor) {
+        await createAppointmentFn({
+          data: {
+            customerName: customerName || 'Sin especificar',
+            customerPhone,
+            serviceId: typeof building === 'number' ? building : null,
+            serviceName: orderName,
+            scheduledFor,
+            notes: `Pedido: ${orderName || 'personalizado'} · Total ${formatMoney(total)}`,
+          },
+        })
+      }
+
       setConfirmation(
-        `Pedido "${orderName || 'personalizado'}" creado por ${formatMoney(total)}.`,
+        scheduleAppointment && scheduledFor
+          ? `Pedido "${orderName || 'personalizado'}" creado por ${formatMoney(total)} y agendado.`
+          : `Pedido "${orderName || 'personalizado'}" creado por ${formatMoney(total)}.`,
       )
+      setLastScheduled(scheduleAppointment && Boolean(scheduledFor))
       cancelBuilding()
       await router.invalidate()
     } finally {
@@ -191,6 +223,43 @@ function ServicesPage() {
             </label>
           </div>
 
+          <div className="border border-amber-200 rounded-lg p-3 mb-4">
+            <label className="flex items-center gap-2 text-sm font-medium text-amber-900 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={scheduleAppointment}
+                onChange={(e) => setScheduleAppointment(e.target.checked)}
+                className="w-4 h-4 accent-amber-700"
+              />
+              <CalendarPlus className="w-4 h-4" />
+              Agendar este pedido en Agenda
+            </label>
+
+            {scheduleAppointment && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                <label className="flex flex-col gap-1 text-sm text-amber-900">
+                  Teléfono (opcional)
+                  <input
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    placeholder="Teléfono del cliente"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-amber-900">
+                  Fecha y hora
+                  <input
+                    required={scheduleAppointment}
+                    type="datetime-local"
+                    value={scheduledFor}
+                    onChange={(e) => setScheduledFor(e.target.value)}
+                    className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+
           <p className="text-sm text-amber-900 mb-1">
             Productos del pedido{' '}
             <span className="text-amber-500 font-normal">
@@ -234,10 +303,21 @@ function ServicesPage() {
                   <input
                     type="number"
                     min="1"
-                    value={line.quantity}
-                    onChange={(e) =>
-                      updateQuantity(index, Number(e.target.value) || 1)
-                    }
+                    value={line.quantity === 0 ? '' : line.quantity}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      if (raw === '') {
+                        updateQuantity(index, 0)
+                        return
+                      }
+                      const parsed = parseInt(raw, 10)
+                      if (!Number.isNaN(parsed)) updateQuantity(index, parsed)
+                    }}
+                    onBlur={(e) => {
+                      if (!e.target.value || Number(e.target.value) < 1) {
+                        updateQuantity(index, 1)
+                      }
+                    }}
                     className="w-16 border border-amber-300 rounded-lg px-2 py-1 text-sm"
                   />
                   <span className="text-sm font-medium text-amber-800 w-20 text-right">
@@ -275,7 +355,11 @@ function ServicesPage() {
               <button
                 type="button"
                 onClick={handleCreatePedido}
-                disabled={cart.length === 0 || submitting}
+                disabled={
+                  cart.length === 0 ||
+                  submitting ||
+                  (scheduleAppointment && !scheduledFor)
+                }
                 className="px-4 py-2 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-medium disabled:opacity-50"
               >
                 {submitting ? 'Creando...' : 'Crear pedido'}
@@ -302,12 +386,16 @@ function ServicesPage() {
       {confirmation && (
         <div className="mb-6 flex items-center justify-between gap-3 bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm">
           <span>{confirmation}</span>
-          <Link
-            to="/ventas"
-            className="font-medium underline whitespace-nowrap"
-          >
-            Ver en Ventas
-          </Link>
+          <span className="flex items-center gap-3 whitespace-nowrap">
+            <Link to="/ventas" className="font-medium underline">
+              Ver en Ventas
+            </Link>
+            {lastScheduled && (
+              <Link to="/agenda" className="font-medium underline">
+                Ver en Agenda
+              </Link>
+            )}
+          </span>
         </div>
       )}
 
