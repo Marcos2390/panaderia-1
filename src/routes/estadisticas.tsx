@@ -1,460 +1,197 @@
-import { createFileRoute, useRouter, Link } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
-import { useState } from 'react'
-import { CalendarPlus, ChevronRight, Plus, Trash2, Users, X } from 'lucide-react'
-import { getProducts } from '../server/products.functions'
-import { getServices } from '../server/services.functions'
-import { createSale } from '../server/sales.functions'
-import { createAppointment } from '../server/appointments.functions'
+import { createFileRoute } from '@tanstack/react-router'
+import { useMemo, useState } from 'react'
+import { Bar } from 'react-chartjs-2'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js'
+import { BarChart3 } from 'lucide-react'
+import { getSales } from '../server/sales.functions'
 
-export const Route = createFileRoute('/servicios')({
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
+
+export const Route = createFileRoute('/estadisticas')({
   loader: async () => {
-    const [products, services] = await Promise.all([
-      getProducts(),
-      getServices(),
-    ])
-    return { products, services }
+    const sales = await getSales()
+    return { sales }
   },
-  component: ServicesPage,
+  component: StatsPage,
 })
-
-type CartLine = {
-  productId: number | null
-  productName: string
-  quantity: number
-  unitPrice: number
-}
 
 function formatMoney(value: string | number) {
   return `$${Number(value).toFixed(2)}`
 }
 
-function ServicesPage() {
-  const { products, services } = Route.useLoaderData()
-  const router = useRouter()
-  const createSaleFn = useServerFn(createSale)
-  const createAppointmentFn = useServerFn(createAppointment)
+const MONTH_LABELS = [
+  'Ene',
+  'Feb',
+  'Mar',
+  'Abr',
+  'May',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dic',
+]
 
-  const activeProducts = products.filter((p) => p.active)
+function monthKey(date: string | Date) {
+  const d = new Date(date)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
 
-  // null = mostrando la lista de lunch; 'custom' = armando desde cero;
-  // number = armando el pedido a partir del lunch con ese id.
-  const [building, setBuilding] = useState<'custom' | number | null>(null)
-  const [orderName, setOrderName] = useState('')
-  const [customerName, setCustomerName] = useState('')
-  const [customerPhone, setCustomerPhone] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState('efectivo')
-  const [cart, setCart] = useState<CartLine[]>([])
-  const [selectedProductId, setSelectedProductId] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [confirmation, setConfirmation] = useState<string | null>(null)
-  const [lastScheduled, setLastScheduled] = useState(false)
-  const [scheduleAppointment, setScheduleAppointment] = useState(false)
-  const [scheduledFor, setScheduledFor] = useState('')
+function StatsPage() {
+  const { sales } = Route.useLoaderData()
 
-  const startFromLunch = (service: (typeof services)[number]) => {
-    setOrderName(service.name)
-    setCustomerName('')
-    setCustomerPhone('')
-    setPaymentMethod('efectivo')
-    setScheduleAppointment(false)
-    setScheduledFor('')
-    setCart(
-      service.items.map((item) => ({
-        productId: item.productId,
-        productName: item.productName,
-        quantity: item.quantity,
-        unitPrice: Number(item.unitPrice),
-      })),
-    )
-    setSelectedProductId('')
-    setBuilding(service.id)
-    setConfirmation(null)
-  }
-
-  const startCustom = () => {
-    setOrderName('')
-    setCustomerName('')
-    setCustomerPhone('')
-    setPaymentMethod('efectivo')
-    setCart([])
-    setSelectedProductId('')
-    setBuilding('custom')
-    setConfirmation(null)
-    setScheduleAppointment(false)
-    setScheduledFor('')
-  }
-
-  const cancelBuilding = () => {
-    setBuilding(null)
-    setCart([])
-    setScheduleAppointment(false)
-    setScheduledFor('')
-    setCustomerPhone('')
-  }
-
-  const addToCart = () => {
-    const product = activeProducts.find(
-      (p) => p.id === Number(selectedProductId),
-    )
-    if (!product) return
-    setCart((prev) => {
-      const existing = prev.find((line) => line.productId === product.id)
-      if (existing) {
-        return prev.map((line) =>
-          line.productId === product.id
-            ? { ...line, quantity: line.quantity + 1 }
-            : line,
-        )
-      }
-      return [
-        ...prev,
-        {
-          productId: product.id,
-          productName: product.name,
-          quantity: 1,
-          unitPrice: Number(product.price),
-        },
-      ]
-    })
-    setSelectedProductId('')
-  }
-
-  const updateQuantity = (index: number, quantity: number) => {
-    setCart((prev) =>
-      prev.map((line, i) => (i === index ? { ...line, quantity } : line)),
-    )
-  }
-
-  const removeLine = (index: number) => {
-    setCart((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  const total = cart.reduce(
-    (sum, line) => sum + line.quantity * line.unitPrice,
-    0,
-  )
-
-  const handleCreatePedido = async () => {
-    if (cart.length === 0) return
-    if (scheduleAppointment && !scheduledFor) return
-    setSubmitting(true)
-    try {
-      const notes = orderName ? `Pedido: ${orderName}` : ''
-      await createSaleFn({
-        data: { customerName, paymentMethod, notes, items: cart },
-      })
-
-      if (scheduleAppointment && scheduledFor) {
-        await createAppointmentFn({
-          data: {
-            customerName: customerName || 'Sin especificar',
-            customerPhone,
-            serviceId: typeof building === 'number' ? building : null,
-            serviceName: orderName,
-            scheduledFor,
-            notes: `Pedido: ${orderName || 'personalizado'} · Total ${formatMoney(total)}`,
-          },
-        })
-      }
-
-      setConfirmation(
-        scheduleAppointment && scheduledFor
-          ? `Pedido "${orderName || 'personalizado'}" creado por ${formatMoney(total)} y agendado.`
-          : `Pedido "${orderName || 'personalizado'}" creado por ${formatMoney(total)}.`,
-      )
-      setLastScheduled(scheduleAppointment && Boolean(scheduledFor))
-      cancelBuilding()
-      await router.invalidate()
-    } finally {
-      setSubmitting(false)
+  const monthlyTotals = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const sale of sales) {
+      if (!sale.createdAt) continue
+      const key = monthKey(sale.createdAt)
+      map.set(key, (map.get(key) ?? 0) + Number(sale.total))
     }
+    return Array.from(map.keys())
+      .sort()
+      .map((key) => {
+        const [year, month] = key.split('-')
+        return {
+          key,
+          label: `${MONTH_LABELS[Number(month) - 1]} ${year}`,
+          total: map.get(key) ?? 0,
+        }
+      })
+  }, [sales])
+
+  const defaultMonth =
+    monthlyTotals[monthlyTotals.length - 1]?.key ?? monthKey(new Date())
+  const [selectedMonth, setSelectedMonth] = useState(defaultMonth)
+
+  const topProducts = useMemo(() => {
+    const map = new Map<string, { quantity: number; revenue: number }>()
+    for (const sale of sales) {
+      if (!sale.createdAt || monthKey(sale.createdAt) !== selectedMonth) {
+        continue
+      }
+      for (const item of sale.items) {
+        const current = map.get(item.productName) ?? {
+          quantity: 0,
+          revenue: 0,
+        }
+        current.quantity += item.quantity
+        current.revenue += Number(item.subtotal)
+        map.set(item.productName, current)
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 10)
+  }, [sales, selectedMonth])
+
+  const monthlyChartData = {
+    labels: monthlyTotals.map((m) => m.label),
+    datasets: [
+      {
+        label: 'Ventas ($)',
+        data: monthlyTotals.map((m) => m.total),
+        backgroundColor: '#b45309',
+        borderRadius: 6,
+      },
+    ],
   }
 
-  // ---------- vista: armando el pedido ----------
-  if (building !== null) {
-    const availableProducts = activeProducts.filter(
-      (p) => !cart.some((line) => line.productId === p.id),
-    )
-
-    return (
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="bg-white border border-amber-200 rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-amber-950">
-              {building === 'custom' ? 'Servicio personalizado' : 'Armar pedido'}
-            </h2>
-            <button type="button" onClick={cancelBuilding} aria-label="Cerrar">
-              <X className="w-5 h-5 text-amber-600" />
-            </button>
-          </div>
-
-          <label className="flex flex-col gap-1 text-sm text-amber-900 mb-3">
-            Nombre del pedido
-            <input
-              value={orderName}
-              onChange={(e) => setOrderName(e.target.value)}
-              className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
-              placeholder="Ej. Lunch para 10 personas"
-            />
-          </label>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-            <label className="flex flex-col gap-1 text-sm text-amber-900">
-              Cliente (opcional)
-              <input
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                placeholder="Nombre del cliente"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-amber-900">
-              Método de pago
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value)}
-                className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
-              >
-                <option value="efectivo">Efectivo</option>
-                <option value="tarjeta">Tarjeta</option>
-                <option value="transferencia">Transferencia</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="border border-amber-200 rounded-lg p-3 mb-4">
-            <label className="flex items-center gap-2 text-sm font-medium text-amber-900 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={scheduleAppointment}
-                onChange={(e) => setScheduleAppointment(e.target.checked)}
-                className="w-4 h-4 accent-amber-700"
-              />
-              <CalendarPlus className="w-4 h-4" />
-              Agendar este pedido en Agenda
-            </label>
-
-            {scheduleAppointment && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-                <label className="flex flex-col gap-1 text-sm text-amber-900">
-                  Teléfono (opcional)
-                  <input
-                    value={customerPhone}
-                    onChange={(e) => setCustomerPhone(e.target.value)}
-                    className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    placeholder="Teléfono del cliente"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm text-amber-900">
-                  Fecha y hora
-                  <input
-                    required={scheduleAppointment}
-                    type="datetime-local"
-                    value={scheduledFor}
-                    onChange={(e) => setScheduledFor(e.target.value)}
-                    className="border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                </label>
-              </div>
-            )}
-          </div>
-
-          <p className="text-sm text-amber-900 mb-1">
-            Productos del pedido{' '}
-            <span className="text-amber-500 font-normal">
-              (sumá, quitá o cambiá cantidades)
-            </span>
-          </p>
-          <div className="flex gap-2 mb-3">
-            <select
-              value={selectedProductId}
-              onChange={(e) => setSelectedProductId(e.target.value)}
-              className="flex-1 border border-amber-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
-            >
-              <option value="">Selecciona un producto...</option>
-              {availableProducts.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name} — {formatMoney(product.price)}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={addToCart}
-              disabled={!selectedProductId}
-              className="flex items-center gap-1 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white font-medium px-3 py-2 rounded-lg"
-            >
-              <Plus className="w-4 h-4" />
-              Agregar
-            </button>
-          </div>
-
-          {cart.length > 0 ? (
-            <div className="divide-y divide-amber-100 border border-amber-100 rounded-lg mb-4">
-              {cart.map((line, index) => (
-                <div
-                  key={index}
-                  className="flex items-center justify-between p-3 gap-2"
-                >
-                  <span className="flex-1 text-sm text-amber-950">
-                    {line.productName}
-                  </span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={line.quantity === 0 ? '' : line.quantity}
-                    onChange={(e) => {
-                      const raw = e.target.value
-                      if (raw === '') {
-                        updateQuantity(index, 0)
-                        return
-                      }
-                      const parsed = parseInt(raw, 10)
-                      if (!Number.isNaN(parsed)) updateQuantity(index, parsed)
-                    }}
-                    onBlur={(e) => {
-                      if (!e.target.value || Number(e.target.value) < 1) {
-                        updateQuantity(index, 1)
-                      }
-                    }}
-                    className="w-16 border border-amber-300 rounded-lg px-2 py-1 text-sm"
-                  />
-                  <span className="text-sm font-medium text-amber-800 w-20 text-right">
-                    {formatMoney(line.quantity * line.unitPrice)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeLine(index)}
-                    aria-label="Quitar"
-                    className="p-1 rounded hover:bg-red-50 text-red-600"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-amber-500 italic mb-4">
-              Todavía no hay productos en este pedido.
-            </p>
-          )}
-
-          <div className="flex items-center justify-between border-t border-amber-100 pt-4">
-            <span className="text-lg font-bold text-amber-950">
-              Total: {formatMoney(total)}
-            </span>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={cancelBuilding}
-                className="px-4 py-2 rounded-lg text-amber-800 hover:bg-amber-50"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleCreatePedido}
-                disabled={
-                  cart.length === 0 ||
-                  submitting ||
-                  (scheduleAppointment && !scheduledFor)
-                }
-                className="px-4 py-2 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-medium disabled:opacity-50"
-              >
-                {submitting ? 'Creando...' : 'Crear pedido'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
+  const topProductsChartData = {
+    labels: topProducts.map((p) => p.name),
+    datasets: [
+      {
+        label: 'Unidades vendidas',
+        data: topProducts.map((p) => p.quantity),
+        backgroundColor: '#c2410c',
+        borderRadius: 6,
+      },
+    ],
   }
 
-  // ---------- vista: lista de lunch para elegir ----------
+  const baseOptions = {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false } },
+      y: { beginAtZero: true, grid: { color: '#fde68a' }, ticks: { precision: 0 } },
+    },
+  }
+
+  const topProductsOptions = {
+    ...baseOptions,
+    indexAxis: 'y' as const,
+    scales: {
+      x: { beginAtZero: true, grid: { color: '#fde68a' }, ticks: { precision: 0 } },
+      y: { grid: { display: false } },
+    },
+  }
+
+  const monthTotalSelected = monthlyTotals.find((m) => m.key === selectedMonth)
+
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-amber-950">Servicios</h1>
-        <p className="text-amber-700">
-          Elegí un lunch estándar como base del pedido — vas a poder sumar o
-          quitar productos y cantidades antes de confirmarlo — o armá un
-          servicio personalizado desde cero.
-        </p>
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="flex items-center gap-2 mb-2">
+        <BarChart3 className="w-7 h-7 text-amber-800" />
+        <h1 className="text-3xl font-bold text-amber-950">Estadísticas</h1>
       </div>
+      <p className="text-amber-700 mb-8">
+        Ventas mensuales y productos más vendidos por mes.
+      </p>
 
-      {confirmation && (
-        <div className="mb-6 flex items-center justify-between gap-3 bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm">
-          <span>{confirmation}</span>
-          <span className="flex items-center gap-3 whitespace-nowrap">
-            <Link to="/ventas" className="font-medium underline">
-              Ver en Ventas
-            </Link>
-            {lastScheduled && (
-              <Link to="/agenda" className="font-medium underline">
-                Ver en Agenda
-              </Link>
-            )}
-          </span>
-        </div>
-      )}
-
-      <button
-        onClick={startCustom}
-        className="w-full mb-6 flex items-center justify-center gap-2 bg-amber-700 hover:bg-amber-800 text-white font-medium py-3 rounded-xl transition-colors"
-      >
-        <Plus className="w-4 h-4" />
-        Servicio personalizado
-      </button>
-
-      {services.length === 0 ? (
+      {sales.length === 0 ? (
         <p className="text-amber-600">
-          Aún no hay lunch estándar.{' '}
-          <Link to="/agregar-lunch" className="underline font-medium">
-            Creá uno en "Agregar lunch"
-          </Link>
-          .
+          Todavía no hay ventas registradas para mostrar estadísticas.
         </p>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {services.map((service) => (
-            <div
-              key={service.id}
-              className="bg-white rounded-xl shadow-sm border border-amber-100 p-5 flex flex-col"
-            >
-              <div className="flex items-start justify-between">
-                <p className="font-semibold text-amber-950">{service.name}</p>
-                <p className="font-semibold text-amber-800">
-                  {formatMoney(service.price)}
-                </p>
-              </div>
-              {service.forPeople ? (
-                <p className="flex items-center gap-1 text-sm text-amber-600 mt-0.5">
-                  <Users className="w-3.5 h-3.5" />
-                  {service.forPeople} personas
-                </p>
-              ) : null}
-              {service.description && (
-                <p className="text-sm text-amber-600 mt-1">
-                  {service.description}
-                </p>
-              )}
-              {service.items.length > 0 && (
-                <p className="text-sm text-amber-700 mt-2">
-                  {service.items
-                    .map((item) => `${item.quantity} ${item.productName}`)
-                    .join(' · ')}
-                </p>
-              )}
-              <button
-                onClick={() => startFromLunch(service)}
-                className="mt-4 flex items-center justify-center gap-1.5 border-2 border-amber-700 text-amber-800 hover:bg-amber-50 font-medium py-2 rounded-lg transition-colors"
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-xl shadow-sm border border-amber-100 p-6">
+            <h2 className="text-lg font-semibold text-amber-950 mb-4">
+              Ventas por mes
+            </h2>
+            <Bar data={monthlyChartData} options={baseOptions} />
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-amber-100 p-6">
+            <div className="flex items-center justify-between mb-1 gap-3 flex-wrap">
+              <h2 className="text-lg font-semibold text-amber-950">
+                Productos más vendidos
+              </h2>
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="border border-amber-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
               >
-                Usar este lunch
-                <ChevronRight className="w-4 h-4" />
-              </button>
+                {monthlyTotals.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
             </div>
-          ))}
+            {monthTotalSelected && (
+              <p className="text-sm text-amber-600 mb-4">
+                Total del mes: {formatMoney(monthTotalSelected.total)}
+              </p>
+            )}
+            {topProducts.length === 0 ? (
+              <p className="text-amber-600 text-sm">
+                No hay ventas registradas en este mes.
+              </p>
+            ) : (
+              <Bar data={topProductsChartData} options={topProductsOptions} />
+            )}
+          </div>
         </div>
       )}
     </div>
